@@ -6014,5 +6014,2055 @@ goHome();
 
 </script>
 
+
+<style>
+.shopClosedScreen{
+    position:fixed;inset:0;z-index:1500;
+    background:rgba(247,247,247,.97);
+    backdrop-filter:blur(18px);
+    display:flex;align-items:center;justify-content:center;
+    padding:25px;animation:pageIn .45s ease;
+}
+.shopClosedCard{
+    width:min(560px,100%);background:#fff;
+    border:1px solid var(--border);border-radius:24px;
+    box-shadow:var(--shadow);padding:45px 30px;text-align:center;
+}
+.closedShopLogo{
+    display:block;width:min(260px,80%);height:90px;
+    object-fit:contain;margin:0 auto 25px;
+}
+.shopClosedCard h1{margin:0 0 10px;font-size:32px;letter-spacing:-.8px}
+.shopClosedCard p{color:#777;line-height:1.6;margin:0 auto 25px;max-width:440px}
+.discountBox{margin-bottom:15px}
+.discountRow{display:flex;gap:8px}
+.discountRow input{flex:1;min-width:0;border:1px solid var(--border);background:#fafafa;color:#111;border-radius:10px;padding:12px 13px;outline:none}
+.discountRow button{border:1px solid var(--border);background:#fff;color:#111;border-radius:10px;padding:12px 14px;font-weight:700}
+.discountRow button:hover{background:#f1f1f1}
+.discountApplied{margin-top:8px;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:#fafafa;display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:13px}
+.discountLine{display:flex;justify-content:space-between;color:#555;font-size:14px;margin-bottom:8px}
+.discountValue{color:#111;font-weight:700}
+.adminSwitch{display:flex;align-items:center;justify-content:space-between;gap:15px;padding:15px;border:1px solid var(--border);border-radius:13px;background:#fafafa}
+.switchButton{border:0;border-radius:99px;padding:9px 15px;font-weight:700;background:#111;color:#fff}
+.switchButton.off{background:#777}
+.discountAdminItem{border:1px solid var(--border);border-radius:13px;padding:15px;margin-bottom:10px;background:#fafafa}
+@media(max-width:620px){.shopClosedCard{padding:35px 20px}.discountRow{flex-direction:column}}
+</style>
+
+<script>
+/* =====================================================
+   GYMQFT - ADDITIONS ONLY
+===================================================== */
+
+let shopOpen =
+    localStorage.getItem("gymqft_shop_open") !== "false";
+
+let discountCodes =
+    loadJSON("gymqft_discount_codes", []);
+
+let appliedDiscountCode = null;
+
+
+/* ---------- CLOSED SHOP SCREEN ---------- */
+
+function ensureClosedShopScreen(){
+    let screen = document.getElementById("shopClosedScreen");
+
+    if(screen) return screen;
+
+    screen = document.createElement("div");
+    screen.id = "shopClosedScreen";
+    screen.className = "shopClosedScreen hidden";
+
+    screen.innerHTML = `
+        <div class="shopClosedCard">
+            <img id="closedShopLogo" class="closedShopLogo" alt="GYMQFT">
+            <h1>Shop is currently closed</h1>
+            <p>The shop is temporarily unavailable. You can still sign in or create an account.</p>
+            <button class="primary" data-action="account" type="button">
+                Account
+            </button>
+        </div>
+    `;
+
+    document.body.appendChild(screen);
+    return screen;
+}
+
+function updateShopVisibility(){
+    const screen = ensureClosedShopScreen();
+
+    const closed =
+        !shopOpen &&
+        !isAdmin() &&
+        document.getElementById("page").classList.contains("hidden");
+
+    screen.classList.toggle("hidden", !closed);
+
+    const closedLogo =
+        document.getElementById("closedShopLogo");
+
+    if(closedLogo){
+        closedLogo.src =
+            localStorage.getItem("gymqft_logo") ||
+            logo ||
+            DEFAULT_LOGO;
+    }
+}
+
+
+/* ---------- DISCOUNT CODES ---------- */
+
+function normalizeDiscountCode(value){
+    return String(value || "").trim().toUpperCase();
+}
+
+function findDiscountCode(code){
+    const normalized = normalizeDiscountCode(code);
+
+    return discountCodes.find(item =>
+        normalizeDiscountCode(item.code) === normalized
+    ) || null;
+}
+
+function getDiscountUsageForCustomer(code, email){
+    if(!email) return 0;
+
+    const normalized =
+        normalizeDiscountCode(code);
+
+    return orders.reduce((count, order) => {
+
+        if(!order || !order.discount)
+            return count;
+
+        if(
+            normalizeDiscountCode(order.discount.code) !==
+            normalized
+        )
+            return count;
+
+        const orderEmail =
+            order.customer?.email ||
+            order.email ||
+            "";
+
+        if(
+            String(orderEmail).toLowerCase() !==
+            String(email).toLowerCase()
+        )
+            return count;
+
+        return count + 1;
+
+    },0);
+}
+
+function validateDiscountCode(code, subtotal, email){
+    const discount =
+        findDiscountCode(code);
+
+    if(!discount)
+        return {
+            ok:false,
+            message:"Invalid discount code"
+        };
+
+    if(discount.expiresAt){
+
+        const expiry =
+            new Date(
+                discount.expiresAt +
+                "T23:59:59"
+            );
+
+        if(
+            !Number.isNaN(expiry.getTime()) &&
+            new Date() > expiry
+        ){
+            return {
+                ok:false,
+                message:"This discount code has expired"
+            };
+        }
+    }
+
+    const minimum =
+        Number(discount.minSubtotal || 0);
+
+    if(subtotal < minimum){
+        return {
+            ok:false,
+            message:
+                "Minimum order value is " +
+                money(minimum)
+        };
+    }
+
+    const limit =
+        Number(discount.usageLimit || 0);
+
+    if(limit > 0){
+
+        const used =
+            getDiscountUsageForCustomer(
+                discount.code,
+                email || currentUser?.email || ""
+            );
+
+        if(used >= limit){
+            return {
+                ok:false,
+                message:
+                    "You have reached the usage limit for this code"
+            };
+        }
+    }
+
+    return {
+        ok:true,
+        discount
+    };
+}
+
+function getCartTotalsWithDiscount(){
+
+    const items =
+        getCartItems();
+
+    const subtotal =
+        items.reduce(
+            (sum,item) =>
+                sum + item.lineTotal,
+            0
+        );
+
+    let discountAmount = 0;
+    let discount = null;
+
+    if(appliedDiscountCode){
+
+        const result =
+            validateDiscountCode(
+                appliedDiscountCode.code,
+                subtotal,
+                currentUser?.email || ""
+            );
+
+        if(result.ok){
+
+            discount =
+                result.discount;
+
+            if(discount.type === "percent"){
+
+                discountAmount =
+                    subtotal *
+                    (
+                        Number(discount.value || 0) /
+                        100
+                    );
+
+            }else{
+
+                discountAmount =
+                    Number(
+                        discount.value || 0
+                    );
+
+            }
+
+            discountAmount =
+                Math.min(
+                    subtotal,
+                    Math.max(
+                        0,
+                        discountAmount
+                    )
+                );
+
+        }else{
+
+            appliedDiscountCode = null;
+        }
+    }
+
+    return {
+        items,
+        subtotal,
+        discountAmount,
+        discount,
+        total:
+            Math.max(
+                0,
+                subtotal - discountAmount
+            )
+    };
+}
+
+function applyDiscountCode(){
+
+    const input =
+        document.getElementById(
+            "discountCodeInput"
+        );
+
+    if(!input)
+        return;
+
+    const code =
+        normalizeDiscountCode(
+            input.value
+        );
+
+    if(!code){
+        showToast("Enter a discount code");
+        return;
+    }
+
+    const totals =
+        getCartTotalsWithDiscount();
+
+    const result =
+        validateDiscountCode(
+            code,
+            totals.subtotal,
+            currentUser?.email || ""
+        );
+
+    if(!result.ok){
+        showToast(result.message);
+        return;
+    }
+
+    appliedDiscountCode =
+        result.discount;
+
+    renderCart();
+
+    showToast(
+        "Discount code applied"
+    );
+}
+
+function removeDiscountCode(){
+
+    appliedDiscountCode = null;
+
+    renderCart();
+
+    showToast(
+        "Discount code removed"
+    );
+}
+
+
+/* ---------- CART OVERRIDE ---------- */
+
+const originalRenderCart =
+    renderCart;
+
+renderCart = function(){
+
+    const totals =
+        getCartTotalsWithDiscount();
+
+    const content =
+        document.getElementById(
+            "cartContent"
+        );
+
+    const items =
+        totals.items;
+
+    let count = 0;
+
+    items.forEach(
+        item =>
+            count += item.quantity
+    );
+
+    if(!items.length){
+
+        content.innerHTML = `
+            <div class="empty">
+                <svg class="icon"
+                     style="width:36px;height:36px;margin-bottom:12px;color:#aaa"
+                     viewBox="0 0 24 24">
+                    <path d="M3 4h2l2.5 11h10L21 7H6"/>
+                    <circle cx="9" cy="20" r="1"/>
+                    <circle cx="18" cy="20" r="1"/>
+                </svg>
+                <div>Your cart is empty.</div>
+            </div>
+        `;
+
+    }else{
+
+        content.innerHTML =
+            items.map(
+                item => {
+
+                    const product =
+                        item.product;
+
+                    return `
+                        <div class="cartItem">
+
+                            <img
+                                class="cartImage"
+                                src="${
+                                    product.image ||
+                                    placeholderImage()
+                                }"
+                                alt="${escapeHTML(product.name)}">
+
+                            <div class="cartInfo">
+
+                                <div class="cartName">
+                                    ${escapeHTML(product.name)}
+                                </div>
+
+                                <div class="cartPrice">
+                                    ${money(product.price)}
+                                </div>
+
+                                <div class="cartControls">
+
+                                    <button
+                                        class="quantityButton"
+                                        data-action="quantity"
+                                        data-id="${escapeHTML(product.id)}"
+                                        data-change="-1"
+                                        type="button">
+
+                                        <svg class="icon" viewBox="0 0 24 24">
+                                            <path d="M5 12h14"/>
+                                        </svg>
+
+                                    </button>
+
+                                    <strong>
+                                        ${item.quantity}
+                                    </strong>
+
+                                    <button
+                                        class="quantityButton"
+                                        data-action="quantity"
+                                        data-id="${escapeHTML(product.id)}"
+                                        data-change="1"
+                                        type="button">
+
+                                        <svg class="icon" viewBox="0 0 24 24">
+                                            <path d="M12 5v14"/>
+                                            <path d="M5 12h14"/>
+                                        </svg>
+
+                                    </button>
+
+                                    <button
+                                        class="removeButton"
+                                        data-action="remove-cart"
+                                        data-id="${escapeHTML(product.id)}"
+                                        type="button">
+
+                                        <svg class="icon" viewBox="0 0 24 24">
+                                            <path d="M4 7h16"/>
+                                            <path d="M10 11v6"/>
+                                            <path d="M14 11v6"/>
+                                            <path d="M6 7l1 14h10l1-14"/>
+                                            <path d="M9 7V4h6v3"/>
+                                        </svg>
+
+                                    </button>
+
+                                </div>
+
+                            </div>
+
+                        </div>
+                    `;
+                }
+            ).join("");
+    }
+
+    const bottom =
+        document.querySelector(
+            ".drawerBottom"
+        );
+
+    if(bottom){
+
+        bottom.innerHTML = `
+
+            <div class="discountBox">
+
+                <div class="discountRow">
+
+                    <input
+                        id="discountCodeInput"
+                        type="text"
+                        maxlength="40"
+                        autocomplete="off"
+                        placeholder="Discount code"
+                        value="${
+                            totals.discount
+                            ? escapeHTML(
+                                totals.discount.code
+                              )
+                            : ""
+                        }">
+
+                    <button
+                        data-action="apply-discount"
+                        type="button">
+                        Apply
+                    </button>
+
+                </div>
+
+                ${
+                    totals.discount
+                    ?
+                    `
+                    <div class="discountApplied">
+
+                        <span>
+                            ${escapeHTML(
+                                totals.discount.code
+                            )}
+                            ·
+                            ${
+                                totals.discount.type ===
+                                "percent"
+                                ?
+                                Number(
+                                    totals.discount.value
+                                ) + "%"
+                                :
+                                money(
+                                    totals.discount.value
+                                )
+                            }
+                        </span>
+
+                        <button
+                            class="smallButton"
+                            data-action="remove-discount"
+                            type="button">
+                            Remove
+                        </button>
+
+                    </div>
+                    `
+                    :
+                    ""
+                }
+
+            </div>
+
+            <div class="discountLine">
+                <span>Subtotal</span>
+                <strong>
+                    ${money(totals.subtotal)}
+                </strong>
+            </div>
+
+            ${
+                totals.discount
+                ?
+                `
+                <div class="discountLine">
+
+                    <span>
+                        Discount
+                    </span>
+
+                    <strong class="discountValue">
+                        -${money(
+                            totals.discountAmount
+                        )}
+                    </strong>
+
+                </div>
+                `
+                :
+                ""
+            }
+
+            <div class="totalLine">
+
+                <span>Total</span>
+
+                <strong id="cartTotal">
+                    ${money(totals.total)}
+                </strong>
+
+            </div>
+
+            <button
+                class="primary"
+                data-action="checkout"
+                ${
+                    !items.length
+                    ? "disabled"
+                    : ""
+                }>
+
+                <svg class="icon" viewBox="0 0 24 24">
+                    <path d="M3 4h2l2.5 11h10L21 7H6"/>
+                    <circle cx="9" cy="20" r="1"/>
+                    <circle cx="18" cy="20" r="1"/>
+                </svg>
+
+                Buy
+
+            </button>
+        `;
+    }
+
+    document.getElementById(
+        "cartBadge"
+    ).textContent = count;
+
+    saveAll();
+};
+
+
+/* ---------- CHECKOUT OVERRIDE ---------- */
+
+const originalOpenCheckout =
+    openCheckout;
+
+openCheckout = function(){
+
+    if(
+        !shopOpen &&
+        !isAdmin()
+    ){
+        showToast(
+            "The shop is currently closed"
+        );
+        openAccount();
+        return;
+    }
+
+    const totals =
+        getCartTotalsWithDiscount();
+
+    if(!totals.items.length){
+
+        renderCart();
+
+        showToast(
+            "Your cart is empty"
+        );
+
+        return;
+    }
+
+    closeCart();
+    closeModal();
+    hidePages();
+
+    const page =
+        document.getElementById(
+            "page"
+        );
+
+    page.classList.remove(
+        "hidden"
+    );
+
+    let summaryHTML = "";
+
+    totals.items.forEach(
+        item => {
+
+            summaryHTML += `
+                <div class="summaryItem">
+
+                    <span>
+                        ${escapeHTML(
+                            item.product.name
+                        )}
+                        × ${item.quantity}
+                    </span>
+
+                    <strong>
+                        ${money(
+                            item.lineTotal
+                        )}
+                    </strong>
+
+                </div>
+            `;
+
+        }
+    );
+
+    page.innerHTML = `
+
+        <h1 class="pageTitle">
+            Checkout
+        </h1>
+
+        <div class="checkoutGrid">
+
+            <form
+                id="checkoutForm"
+                class="panel">
+
+                <h3 style="margin:0 0 22px;">
+                    Customer details
+                </h3>
+
+                <div class="field">
+
+                    <label>
+                        Full name
+                    </label>
+
+                    <input
+                        id="checkoutName"
+                        type="text"
+                        required
+                        value="${
+                            escapeHTML(
+                                currentUser?.name || ""
+                            )
+                        }">
+
+                </div>
+
+                <div class="field">
+
+                    <label>
+                        Email address
+                    </label>
+
+                    <input
+                        id="checkoutEmail"
+                        type="email"
+                        required
+                        value="${
+                            escapeHTML(
+                                currentUser?.email || ""
+                            )
+                        }">
+
+                </div>
+
+                <button
+                    class="primary"
+                    type="submit">
+
+                    Place order
+
+                </button>
+
+            </form>
+
+            <div class="panel">
+
+                <h3 style="margin:0 0 10px;">
+                    Order summary
+                </h3>
+
+                ${summaryHTML}
+
+                <div style="height:10px;"></div>
+
+                <div class="summaryItem">
+                    <span>Subtotal</span>
+                    <strong>${money(totals.subtotal)}</strong>
+                </div>
+
+                ${
+                    totals.discount
+                    ?
+                    `
+                    <div class="summaryItem">
+
+                        <span>
+                            Discount
+                            (${escapeHTML(
+                                totals.discount.code
+                            )})
+                        </span>
+
+                        <strong>
+                            -${money(
+                                totals.discountAmount
+                            )}
+                        </strong>
+
+                    </div>
+                    `
+                    :
+                    ""
+                }
+
+                <div style="
+                    display:flex;
+                    justify-content:space-between;
+                    margin-top:18px;
+                    font-size:19px;
+                ">
+
+                    <strong>
+                        Total
+                    </strong>
+
+                    <strong>
+                        ${money(totals.total)}
+                    </strong>
+
+                </div>
+
+            </div>
+
+        </div>
+    `;
+};
+
+
+/* ---------- ORDER OVERRIDE ---------- */
+
+const originalHandlePlaceOrder =
+    handlePlaceOrder;
+
+handlePlaceOrder = function(){
+
+    if(
+        !shopOpen &&
+        !isAdmin()
+    ){
+        showToast(
+            "The shop is currently closed"
+        );
+        openAccount();
+        return;
+    }
+
+    const nameInput =
+        document.getElementById(
+            "checkoutName"
+        );
+
+    const emailInput =
+        document.getElementById(
+            "checkoutEmail"
+        );
+
+    if(!nameInput || !emailInput){
+        showToast(
+            "Checkout form not found"
+        );
+        return;
+    }
+
+    const name =
+        nameInput.value.trim();
+
+    const email =
+        emailInput.value.trim().toLowerCase();
+
+    if(!name){
+        showToast(
+            "Enter your full name"
+        );
+        return;
+    }
+
+    if(
+        !email ||
+        !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(
+            email
+        )
+    ){
+        showToast(
+            "Enter a valid email"
+        );
+        return;
+    }
+
+    const totals =
+        getCartTotalsWithDiscount();
+
+    if(!totals.items.length){
+        showToast(
+            "Your cart is empty"
+        );
+        return;
+    }
+
+    /*
+       Validate once more at the exact moment
+       the order is placed.
+    */
+    if(totals.discount){
+
+        const check =
+            validateDiscountCode(
+                totals.discount.code,
+                totals.subtotal,
+                email
+            );
+
+        if(!check.ok){
+            appliedDiscountCode = null;
+            renderCart();
+            showToast(
+                check.message
+            );
+            return;
+        }
+    }
+
+    const orderItems =
+        totals.items.map(
+            item => ({
+
+                id:
+                    item.product.id,
+
+                name:
+                    item.product.name,
+
+                price:
+                    Number(
+                        item.product.price || 0
+                    ),
+
+                quantity:
+                    item.quantity,
+
+                image:
+                    item.product.image || ""
+
+            })
+        );
+
+    const order = {
+
+        id:
+            "GYM-" +
+            Date.now()
+            .toString(36)
+            .toUpperCase(),
+
+        date:
+            new Date()
+            .toISOString(),
+
+        customer:{
+            name,
+            email
+        },
+
+        items:
+            orderItems,
+
+        subtotal:
+            Number(
+                totals.subtotal.toFixed(2)
+            ),
+
+        discount:
+            totals.discount
+            ?
+            {
+                code:
+                    totals.discount.code,
+
+                type:
+                    totals.discount.type,
+
+                value:
+                    Number(
+                        totals.discount.value
+                    ),
+
+                amount:
+                    Number(
+                        totals.discountAmount
+                        .toFixed(2)
+                    )
+            }
+            :
+            null,
+
+        total:
+            Number(
+                totals.total.toFixed(2)
+            )
+    };
+
+    orders.unshift(order);
+
+    cart = [];
+    appliedDiscountCode = null;
+
+    saveAll();
+    updateHeader();
+    renderCart();
+    showOrderSuccess(order);
+};
+
+
+/* ---------- ADMIN EXTENSIONS ---------- */
+
+const originalRenderAdmin =
+    renderAdmin;
+
+const originalRenderAdminSection =
+    renderAdminSection;
+
+renderAdmin = function(){
+
+    originalRenderAdmin();
+
+    const menu =
+        document.querySelector(
+            ".adminMenu"
+        );
+
+    if(!menu)
+        return;
+
+    if(
+        !menu.querySelector(
+            '[data-admin-section="discounts"]'
+        )
+    ){
+
+        const discountButton =
+            document.createElement(
+                "button"
+            );
+
+        discountButton.type =
+            "button";
+
+        discountButton.dataset.adminSection =
+            "discounts";
+
+        discountButton.innerHTML = `
+            <svg class="icon" viewBox="0 0 24 24">
+                <path d="M20 12l-8 8-8-8V4h8l8 8z"/>
+                <circle cx="8" cy="8" r="1"/>
+            </svg>
+            Discount Codes
+        `;
+
+        menu.insertBefore(
+            discountButton,
+            menu.firstElementChild?.nextElementSibling || null
+        );
+    }
+
+    if(
+        !menu.querySelector(
+            '[data-admin-section="shop-status"]'
+        )
+    ){
+
+        const statusButton =
+            document.createElement(
+                "button"
+            );
+
+        statusButton.type =
+            "button";
+
+        statusButton.dataset.adminSection =
+            "shop-status";
+
+        statusButton.innerHTML = `
+            <svg class="icon" viewBox="0 0 24 24">
+                <path d="M4 4h16v16H4z"/>
+                <path d="M8 12h8"/>
+            </svg>
+            Shop Status
+        `;
+
+        menu.appendChild(
+            statusButton
+        );
+    }
+};
+
+function renderDiscountAdminSection(){
+
+    const content =
+        document.getElementById(
+            "adminContent"
+        );
+
+    if(!content)
+        return;
+
+    const rows =
+        discountCodes.length
+        ?
+        discountCodes.map(
+            code => `
+                <div class="discountAdminItem">
+
+                    <strong style="font-size:17px;">
+                        ${escapeHTML(
+                            code.code
+                        )}
+                    </strong>
+
+                    <div style="
+                        color:#777;
+                        font-size:13px;
+                        margin-top:5px;
+                    ">
+
+                        ${
+                            code.type === "percent"
+                            ?
+                            Number(code.value) + "% off"
+                            :
+                            money(code.value) + " off"
+                        }
+
+                        ${
+                            Number(
+                                code.minSubtotal || 0
+                            ) > 0
+                            ?
+                            " · Minimum " +
+                            money(
+                                code.minSubtotal
+                            )
+                            :
+                            ""
+                        }
+
+                        ${
+                            Number(
+                                code.usageLimit || 0
+                            ) > 0
+                            ?
+                            " · " +
+                            Number(
+                                code.usageLimit
+                            ) +
+                            " use" +
+                            (
+                                Number(
+                                    code.usageLimit
+                                ) === 1
+                                ? ""
+                                : "s"
+                            ) +
+                            " per customer"
+                            :
+                            " · Unlimited uses per customer"
+                        }
+
+                        ${
+                            code.expiresAt
+                            ?
+                            " · Expires " +
+                            escapeHTML(
+                                code.expiresAt
+                            )
+                            :
+                            ""
+                        }
+
+                    </div>
+
+                </div>
+            `
+        ).join("")
+        :
+        `
+            <div class="empty">
+                No discount codes created yet.
+            </div>
+        `;
+
+    content.innerHTML = `
+
+        <h2 style="margin:0 0 25px;">
+            Discount Codes
+        </h2>
+
+        <form
+            id="discountCodeForm"
+            class="panel"
+            style="
+                padding:20px;
+                box-shadow:none;
+                margin-bottom:18px;
+            ">
+
+            <div class="field">
+                <label>Code</label>
+                <input
+                    id="discountCodeName"
+                    required
+                    maxlength="40"
+                    placeholder="e.g. WELCOME10">
+            </div>
+
+            <div class="field">
+                <label>Discount type</label>
+                <select id="discountCodeType">
+                    <option value="percent">
+                        Percentage
+                    </option>
+                    <option value="fixed">
+                        Fixed amount
+                    </option>
+                </select>
+            </div>
+
+            <div class="field">
+                <label>Discount value</label>
+                <input
+                    id="discountCodeValue"
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    required
+                    placeholder="10">
+            </div>
+
+            <div class="field">
+                <label>
+                    Expiration date (optional)
+                </label>
+                <input
+                    id="discountCodeExpiry"
+                    type="date">
+            </div>
+
+            <div class="field">
+                <label>
+                    Minimum order value (optional)
+                </label>
+                <input
+                    id="discountCodeMinimum"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    placeholder="0">
+            </div>
+
+            <div class="field">
+                <label>
+                    Maximum uses per customer
+                    (0 = unlimited)
+                </label>
+                <input
+                    id="discountCodeUsageLimit"
+                    type="number"
+                    min="0"
+                    step="1"
+                    value="1">
+            </div>
+
+            <button
+                class="primary"
+                type="submit">
+                Create discount code
+            </button>
+
+        </form>
+
+        <h3 style="margin:25px 0 15px;">
+            Created codes
+        </h3>
+
+        ${rows}
+    `;
+}
+
+function renderShopStatusAdminSection(){
+
+    const content =
+        document.getElementById(
+            "adminContent"
+        );
+
+    if(!content)
+        return;
+
+    content.innerHTML = `
+
+        <h2 style="margin:0 0 25px;">
+            Shop Status
+        </h2>
+
+        <div class="panel">
+
+            <div class="adminSwitch">
+
+                <div>
+
+                    <strong>
+                        ${
+                            shopOpen
+                            ? "Shop is open"
+                            : "Shop is closed"
+                        }
+                    </strong>
+
+                    <div style="
+                        color:#777;
+                        font-size:13px;
+                        margin-top:5px;
+                    ">
+
+                        ${
+                            shopOpen
+                            ?
+                            "Customers can browse and order normally."
+                            :
+                            "Customers see the closed-shop screen but can still access their account."
+                        }
+
+                    </div>
+
+                </div>
+
+                <button
+                    class="switchButton ${
+                        shopOpen ? "" : "off"
+                    }"
+                    data-action="toggle-shop-status"
+                    type="button">
+
+                    ${
+                        shopOpen
+                        ? "Turn off"
+                        : "Turn on"
+                    }
+
+                </button>
+
+            </div>
+
+        </div>
+    `;
+}
+
+renderAdminSection = function(section){
+
+    if(section === "discounts"){
+        renderDiscountAdminSection();
+        return;
+    }
+
+    if(section === "shop-status"){
+        renderShopStatusAdminSection();
+        return;
+    }
+
+    originalRenderAdminSection(section);
+};
+
+
+/* ---------- SHOP STATUS ---------- */
+
+function toggleShopStatus(){
+
+    if(!isAdmin())
+        return;
+
+    shopOpen =
+        !shopOpen;
+
+    localStorage.setItem(
+        "gymqft_shop_open",
+        String(shopOpen)
+    );
+
+    updateShopVisibility();
+    renderAdmin();
+
+    /*
+       Keep the Shop Status section visible
+       after changing the switch.
+    */
+    renderShopStatusAdminSection();
+
+    showToast(
+        shopOpen
+        ? "Shop is now open"
+        : "Shop is now closed"
+    );
+}
+
+
+/* ---------- ADMIN + CLOSED SHOP NAVIGATION ---------- */
+
+const originalOpenAccount =
+    openAccount;
+
+openAccount = function(){
+
+    const screen =
+        document.getElementById(
+            "shopClosedScreen"
+        );
+
+    if(screen)
+        screen.classList.add(
+            "hidden"
+        );
+
+    originalOpenAccount();
+
+    updateShopVisibility();
+};
+
+const originalLogout =
+    logout;
+
+logout = function(){
+
+    originalLogout();
+
+    appliedDiscountCode = null;
+    updateShopVisibility();
+};
+
+
+/* ---------- LOGO ON RECEIPT ---------- */
+
+function rasterizeLogoForPDF(dataUrl){
+
+    return new Promise(
+        (resolve,reject) => {
+
+            if(!dataUrl){
+                reject(
+                    new Error("No logo")
+                );
+                return;
+            }
+
+            const img =
+                new Image();
+
+            img.onload =
+                function(){
+
+                    const width =
+                        img.naturalWidth ||
+                        img.width ||
+                        600;
+
+                    const height =
+                        img.naturalHeight ||
+                        img.height ||
+                        180;
+
+                    const scale =
+                        Math.min(
+                            1,
+                            1000 /
+                            Math.max(
+                                width,
+                                height
+                            )
+                        );
+
+                    const canvas =
+                        document.createElement(
+                            "canvas"
+                        );
+
+                    canvas.width =
+                        Math.max(
+                            1,
+                            Math.round(
+                                width * scale
+                            )
+                        );
+
+                    canvas.height =
+                        Math.max(
+                            1,
+                            Math.round(
+                                height * scale
+                            )
+                        );
+
+                    const ctx =
+                        canvas.getContext(
+                            "2d"
+                        );
+
+                    ctx.fillStyle =
+                        "#ffffff";
+
+                    ctx.fillRect(
+                        0,
+                        0,
+                        canvas.width,
+                        canvas.height
+                    );
+
+                    ctx.drawImage(
+                        img,
+                        0,
+                        0,
+                        canvas.width,
+                        canvas.height
+                    );
+
+                    resolve({
+                        dataUrl:
+                            canvas.toDataURL(
+                                "image/png"
+                            ),
+                        width:
+                            canvas.width,
+                        height:
+                            canvas.height
+                    });
+                };
+
+            img.onerror =
+                function(){
+                    reject(
+                        new Error(
+                            "Could not load logo"
+                        )
+                    );
+                };
+
+            img.src =
+                dataUrl;
+        }
+    );
+}
+
+
+/*
+   Override only the PDF creation.
+   It automatically uses the existing
+   gymqft_logo from localStorage.
+*/
+createPDF = async function(order){
+
+    const {
+        jsPDF
+    } =
+        window.jspdf;
+
+    const doc =
+        new jsPDF();
+
+    const storedLogo =
+        localStorage.getItem(
+            "gymqft_logo"
+        ) ||
+        logo ||
+        DEFAULT_LOGO;
+
+    doc.setFillColor(
+        17,
+        17,
+        17
+    );
+
+    doc.rect(
+        0,
+        0,
+        210,
+        44,
+        "F"
+    );
+
+    try{
+
+        const image =
+            await rasterizeLogoForPDF(
+                storedLogo
+            );
+
+        const maxWidth = 62;
+        const maxHeight = 28;
+
+        const scale =
+            Math.min(
+                maxWidth / image.width,
+                maxHeight / image.height
+            );
+
+        const w =
+            image.width * scale;
+
+        const h =
+            image.height * scale;
+
+        const x = 20;
+        const y = 22 - h / 2;
+
+        doc.setFillColor(
+            255,
+            255,
+            255
+        );
+
+        doc.roundedRect(
+            x - 3,
+            y - 3,
+            w + 6,
+            h + 6,
+            3,
+            3,
+            "F"
+        );
+
+        doc.addImage(
+            image.dataUrl,
+            "PNG",
+            x,
+            y,
+            w,
+            h,
+            undefined,
+            "FAST"
+        );
+
+    }catch(error){
+
+        doc.setTextColor(
+            255,
+            255,
+            255
+        );
+
+        doc.setFontSize(
+            25
+        );
+
+        doc.text(
+            "GYMQFT",
+            20,
+            27
+        );
+    }
+
+    doc.setTextColor(
+        20,
+        20,
+        20
+    );
+
+    doc.setFontSize(
+        20
+    );
+
+    doc.text(
+        "ORDER RECEIPT",
+        20,
+        62
+    );
+
+    doc.setFontSize(
+        10
+    );
+
+    doc.text(
+        "Order: " +
+        order.id,
+        20,
+        73
+    );
+
+    doc.text(
+        "Date: " +
+        new Date(
+            order.date
+        ).toLocaleString(),
+        20,
+        81
+    );
+
+    doc.text(
+        "Customer: " +
+        order.customer.name,
+        20,
+        95
+    );
+
+    doc.text(
+        "Email: " +
+        order.customer.email,
+        20,
+        103
+    );
+
+    let y = 119;
+
+    doc.setFontSize(
+        11
+    );
+
+    for(
+        const item of
+        (order.items || [])
+    ){
+
+        doc.text(
+            item.name +
+            " x" +
+            item.quantity,
+            20,
+            y
+        );
+
+        doc.text(
+            money(
+                Number(item.price) *
+                Number(item.quantity)
+            ),
+            175,
+            y,
+            {
+                align:"right"
+            }
+        );
+
+        y += 8;
+
+        if(y > 260){
+
+            doc.addPage();
+
+            y = 25;
+        }
+    }
+
+    y += 7;
+
+    doc.setDrawColor(
+        220,
+        220,
+        220
+    );
+
+    doc.line(
+        20,
+        y,
+        190,
+        y
+    );
+
+    y += 10;
+
+    doc.setTextColor(
+        90,
+        90,
+        90
+    );
+
+    doc.text(
+        "Subtotal",
+        20,
+        y
+    );
+
+    doc.text(
+        money(
+            order.subtotal ??
+            order.total
+        ),
+        175,
+        y,
+        {
+            align:"right"
+        }
+    );
+
+    if(order.discount){
+
+        y += 8;
+
+        doc.setTextColor(
+            20,
+            120,
+            60
+        );
+
+        doc.text(
+            "Discount (" +
+            order.discount.code +
+            ")",
+            20,
+            y
+        );
+
+        doc.text(
+            "-" +
+            money(
+                order.discount.amount
+            ),
+            175,
+            y,
+            {
+                align:"right"
+            }
+        );
+    }
+
+    y += 10;
+
+    doc.setTextColor(
+        20,
+        20,
+        20
+    );
+
+    doc.setFontSize(
+        13
+    );
+
+    doc.text(
+        "Total",
+        20,
+        y
+    );
+
+    doc.text(
+        money(
+            order.total
+        ),
+        175,
+        y,
+        {
+            align:"right"
+        }
+    );
+
+    doc.setFontSize(
+        10
+    );
+
+    doc.setTextColor(
+        120,
+        120,
+        120
+    );
+
+    doc.text(
+        "Thank you for your order.",
+        20,
+        y + 18
+    );
+
+    doc.save(
+        order.id +
+        "-receipt.pdf"
+    );
+};
+
+
+/* ---------- NEW CLICK ACTIONS ---------- */
+
+document.addEventListener(
+    "click",
+    function(event){
+
+        const button =
+            event.target.closest(
+                "[data-action]"
+            );
+
+        if(!button)
+            return;
+
+        const action =
+            button.dataset.action;
+
+        if(action === "apply-discount"){
+            applyDiscountCode();
+        }
+
+        if(action === "remove-discount"){
+            removeDiscountCode();
+        }
+
+        if(action === "toggle-shop-status"){
+            toggleShopStatus();
+        }
+
+    }
+);
+
+
+/* ---------- DISCOUNT FORM ---------- */
+
+document.addEventListener(
+    "submit",
+    function(event){
+
+        const form =
+            event.target;
+
+        if(
+            !form ||
+            form.id !==
+            "discountCodeForm"
+        )
+            return;
+
+        event.preventDefault();
+
+        if(!isAdmin())
+            return;
+
+        const code =
+            normalizeDiscountCode(
+                document.getElementById(
+                    "discountCodeName"
+                ).value
+            );
+
+        const type =
+            document.getElementById(
+                "discountCodeType"
+            ).value;
+
+        const value =
+            Number(
+                document.getElementById(
+                    "discountCodeValue"
+                ).value
+            );
+
+        const expiresAt =
+            document.getElementById(
+                "discountCodeExpiry"
+            ).value;
+
+        const minSubtotal =
+            Number(
+                document.getElementById(
+                    "discountCodeMinimum"
+                ).value
+            ) || 0;
+
+        const usageLimit =
+            Number(
+                document.getElementById(
+                    "discountCodeUsageLimit"
+                ).value
+            ) || 0;
+
+        if(!code){
+            showToast(
+                "Enter a discount code"
+            );
+            return;
+        }
+
+        if(
+            !/^[A-Z0-9_-]{2,40}$/.test(
+                code
+            )
+        ){
+            showToast(
+                "Use 2-40 letters, numbers, - or _"
+            );
+            return;
+        }
+
+        if(findDiscountCode(code)){
+            showToast(
+                "This discount code already exists"
+            );
+            return;
+        }
+
+        if(
+            !Number.isFinite(value) ||
+            value <= 0
+        ){
+            showToast(
+                "Enter a valid discount value"
+            );
+            return;
+        }
+
+        if(
+            type === "percent" &&
+            value > 100
+        ){
+            showToast(
+                "Percentage cannot exceed 100%"
+            );
+            return;
+        }
+
+        discountCodes.push({
+
+            id:
+                "discount-" +
+                Date.now() +
+                "-" +
+                Math.random()
+                .toString(36)
+                .slice(2,8),
+
+            code,
+            type,
+            value,
+            expiresAt,
+            minSubtotal,
+            usageLimit,
+
+            createdAt:
+                new Date()
+                .toISOString()
+        });
+
+        localStorage.setItem(
+            "gymqft_discount_codes",
+            JSON.stringify(
+                discountCodes
+            )
+        );
+
+        renderAdminSection(
+            "discounts"
+        );
+
+        showToast(
+            "Discount code created"
+        );
+    }
+);
+
+
+/* ---------- ADD CLOSED SCREEN + INITIAL STATE ---------- */
+
+ensureClosedShopScreen();
+
+document.getElementById(
+    "closedShopLogo"
+).src =
+    localStorage.getItem(
+        "gymqft_logo"
+    ) ||
+    logo ||
+    DEFAULT_LOGO;
+
+updateShopVisibility();
+
+</script>
+
 </body>
 </html>
