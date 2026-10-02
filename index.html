@@ -6017,7 +6017,7 @@ goHome();
 
 <style>
 .shopClosedScreen{
-    position:fixed;inset:0;z-index:1500;
+    position:fixed;inset:0;z-index:99999;
     background:rgba(247,247,247,.97);
     backdrop-filter:blur(18px);
     display:flex;align-items:center;justify-content:center;
@@ -6091,11 +6091,23 @@ function ensureClosedShopScreen(){
 
 function updateShopVisibility(){
     const screen = ensureClosedShopScreen();
+    const shopPage = document.getElementById("shopPage");
+    const page = document.getElementById("page");
+    const adminPage = document.getElementById("adminPage");
 
     const closed =
         !shopOpen &&
         !isAdmin() &&
-        document.getElementById("page").classList.contains("hidden");
+        !!shopPage &&
+        !shopPage.classList.contains("hidden");
+
+    // When the store is closed, completely cover the store itself.
+    // Account/login/register pages remain accessible.
+    if(closed){
+        shopPage.classList.add("hidden");
+        if(page) page.classList.add("hidden");
+        if(adminPage) adminPage.classList.add("hidden");
+    }
 
     screen.classList.toggle("hidden", !closed);
 
@@ -7432,6 +7444,27 @@ logout = function(){
     originalLogout();
 
     appliedDiscountCode = null;
+    updateShopVisibility();
+};
+
+// Re-check the shop state whenever Home is opened.
+const originalGoHome =
+    goHome;
+
+goHome = function(){
+
+    if(!shopOpen && !isAdmin()){
+        const screen = ensureClosedShopScreen();
+        screen.classList.remove("hidden");
+
+        const shopPage = document.getElementById("shopPage");
+        if(shopPage) shopPage.classList.add("hidden");
+
+        updateShopVisibility();
+        return;
+    }
+
+    originalGoHome();
     updateShopVisibility();
 };
 
